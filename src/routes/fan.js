@@ -26,6 +26,8 @@ router.post('/registerStart', async (req, res) => {
 
     const accountId = uuidv4();
     const now = new Date();
+    const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+    const otpExpiresAt = new Date(now.getTime() + 10 * 60 * 1000);
 
     const batch = db.batch();
 
@@ -37,6 +39,8 @@ router.post('/registerStart', async (req, res) => {
       activeCardCount: 0,
       lastIssuanceAt: null,
       createdAt: now,
+      otpCode,
+      otpExpiresAt,
     });
 
     batch.set(db.collection('emailIndex').doc(emailLower), {
@@ -46,8 +50,8 @@ router.post('/registerStart', async (req, res) => {
 
     await batch.commit();
 
-    // TODO: replace with real OTP service
-    // OTP send simulated as success
+    // TODO: replace with nodemailer — send otpCode to email
+    console.log(`[registerStart] OTP for ${emailLower}: ${otpCode}`);
 
     return res.status(200).json({ ok: true });
   } catch (err) {
@@ -57,8 +61,45 @@ router.post('/registerStart', async (req, res) => {
 });
 
 // POST /fan/verifyEmail
+// TODO: add IP rate limiting
 router.post('/verifyEmail', async (req, res) => {
-  res.status(501).json({ message: 'Not implemented yet' });
+  try {
+    const { email, code } = req.body;
+
+    // GUARD — cheapest checks first
+    const emailLower = email ? email.toLowerCase() : null;
+
+    const emailIndexSnap = await db.collection('emailIndex').doc(emailLower).get();
+    if (!emailIndexSnap.exists) {
+      return res.status(404).json({ error: 'account not found' });
+    }
+
+    const { accountId } = emailIndexSnap.data();
+
+    const accountSnap = await db.collection('accounts').doc(accountId).get();
+    if (!accountSnap.exists) {
+      return res.status(404).json({ error: 'account not found' });
+    }
+
+    const account = accountSnap.data();
+
+    if (account.otpCode !== code) {
+      return res.status(400).json({ error: 'invalid OTP code' });
+    }
+
+    if (account.otpExpiresAt.toDate() < new Date()) {
+      return res.status(400).json({ error: 'OTP code expired' });
+    }
+
+    // EXECUTE
+    await db.collection('accounts').doc(accountId).update({ verified: true });
+
+    // RETURN
+    return res.status(200).json({ accountId });
+  } catch (err) {
+    console.error('[verifyEmail] error:', err);
+    return res.status(500).json({ error: 'server error' });
+  }
 });
 
 // POST /fan/createProfilesAndIssuance

@@ -42,8 +42,166 @@ function makeCollectionMock({ emailIndexExists = false } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// describe block
+// describe blocks
 // ---------------------------------------------------------------------------
+
+describe('POST /fan/verifyEmail', () => {
+  const ACCOUNT_ID = 'acc-test-123';
+  const VALID_EMAIL = 'alice@example.com';
+  const VALID_CODE = '123456';
+  const futureDate = new Date(Date.now() + 10 * 60 * 1000);
+  const pastDate = new Date(Date.now() - 1 * 60 * 1000);
+
+  function makeVerifyMocks({
+    emailIndexExists = true,
+    accountExists = true,
+    otpCode = VALID_CODE,
+    otpExpiresAt = futureDate,
+    updateShouldThrow = false,
+  } = {}) {
+    db.collection.mockImplementation((collectionName) => {
+      if (collectionName === 'emailIndex') {
+        return {
+          doc: jest.fn().mockReturnValue({
+            get: jest.fn().mockResolvedValue({
+              exists: emailIndexExists,
+              data: () => ({ accountId: ACCOUNT_ID }),
+            }),
+          }),
+        };
+      }
+
+      if (collectionName === 'accounts') {
+        return {
+          doc: jest.fn().mockReturnValue({
+            get: jest.fn().mockResolvedValue({
+              exists: accountExists,
+              data: () => ({
+                emailLower: VALID_EMAIL,
+                otpCode,
+                otpExpiresAt: { toDate: () => otpExpiresAt },
+              }),
+            }),
+            update: updateShouldThrow
+              ? jest.fn().mockRejectedValue(new Error('Firestore unavailable'))
+              : jest.fn().mockResolvedValue(undefined),
+          }),
+        };
+      }
+    });
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 1 — Happy path
+  // -------------------------------------------------------------------------
+
+  describe('happy path', () => {
+    it('returns 200 { accountId } for valid email and code', async () => {
+      makeVerifyMocks();
+
+      const res = await request(app)
+        .post('/fan/verifyEmail')
+        .send({ email: VALID_EMAIL, code: VALID_CODE });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ accountId: ACCOUNT_ID });
+    });
+
+    it('does not return email in the response', async () => {
+      makeVerifyMocks();
+
+      const res = await request(app)
+        .post('/fan/verifyEmail')
+        .send({ email: VALID_EMAIL, code: VALID_CODE });
+
+      expect(res.body).not.toHaveProperty('email');
+      expect(res.body).not.toHaveProperty('emailLower');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 3 — Guard failures (one test per guard clause)
+  // -------------------------------------------------------------------------
+
+  describe('guard failures', () => {
+    it('returns 404 "account not found" when emailIndex doc does not exist', async () => {
+      makeVerifyMocks({ emailIndexExists: false });
+
+      const res = await request(app)
+        .post('/fan/verifyEmail')
+        .send({ email: VALID_EMAIL, code: VALID_CODE });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'account not found' });
+    });
+
+    it('returns 404 "account not found" when accounts doc does not exist', async () => {
+      makeVerifyMocks({ accountExists: false });
+
+      const res = await request(app)
+        .post('/fan/verifyEmail')
+        .send({ email: VALID_EMAIL, code: VALID_CODE });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'account not found' });
+    });
+
+    it('returns 400 "invalid OTP code" when code does not match', async () => {
+      makeVerifyMocks({ otpCode: '999999' });
+
+      const res = await request(app)
+        .post('/fan/verifyEmail')
+        .send({ email: VALID_EMAIL, code: VALID_CODE });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'invalid OTP code' });
+    });
+
+    it('returns 400 "OTP code expired" when otpExpiresAt is in the past', async () => {
+      makeVerifyMocks({ otpExpiresAt: pastDate });
+
+      const res = await request(app)
+        .post('/fan/verifyEmail')
+        .send({ email: VALID_EMAIL, code: VALID_CODE });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'OTP code expired' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 4 — Edge cases
+  // -------------------------------------------------------------------------
+
+  describe('edge cases', () => {
+    it('lowercases email before looking up emailIndex', async () => {
+      makeVerifyMocks();
+
+      const res = await request(app)
+        .post('/fan/verifyEmail')
+        .send({ email: 'ALICE@EXAMPLE.COM', code: VALID_CODE });
+
+      // Should resolve successfully — email was lowercased before the lookup
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ accountId: ACCOUNT_ID });
+    });
+
+    it('returns 500 "server error" when accounts.update() throws', async () => {
+      makeVerifyMocks({ updateShouldThrow: true });
+
+      const res = await request(app)
+        .post('/fan/verifyEmail')
+        .send({ email: VALID_EMAIL, code: VALID_CODE });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'server error' });
+    });
+  });
+});
 
 describe('POST /fan/registerStart', () => {
   beforeEach(() => {
