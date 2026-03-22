@@ -4,7 +4,7 @@
 - [x] POST /fan/registerStart — implemented, tested
 - [x] POST /fan/verifyEmail — implemented, tested
 - [x] POST /fan/createProfilesAndIssuance — implemented, tested
-- [ ] GET /fan/issuance/:issuanceId
+- [x] GET /fan/issuance/:issuanceId — implemented, tested
 
 ## Staff
 - [ ] POST /staff/issueCard
