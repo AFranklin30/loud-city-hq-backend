@@ -3,7 +3,7 @@
 ## Fan
 - [x] POST /fan/registerStart — implemented, tested
 - [x] POST /fan/verifyEmail — implemented, tested
-- [ ] POST /fan/createProfilesAndIssuance
+- [x] POST /fan/createProfilesAndIssuance — implemented, tested
 - [ ] GET /fan/issuance/:issuanceId
 
 ## Staff
@@ -20,3 +20,4 @@
 ## TODOs
 - [ ] OTP service (stubbed in registerStart)
 - [ ] IP rate limiting (fan endpoints)
+- [ ] Ask TPM: what should the issuance cooldown window be? (currently hard-coded to 24 hours in createProfilesAndIssuance)
