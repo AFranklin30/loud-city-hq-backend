@@ -590,3 +590,179 @@ describe('POST /fan/registerStart', () => {
     });
   });
 });
+
+describe('GET /fan/issuance/:issuanceId', () => {
+  const ISSUANCE_ID = 'issuance-test-abc123';
+  const EXPIRES_AT = new Date('2026-06-01T00:00:00.000Z');
+
+  function makeIssuanceMocks({
+    issuanceExists   = true,
+    issuanceUsed     = false,
+    profileCount     = 2,
+    profileDocs      = [
+      { id: 'profile-1', data: () => ({ displayName: 'Alice Thunder', type: 'adult' }) },
+      { id: 'profile-2', data: () => ({ displayName: 'Kid One',       type: 'child' }) },
+    ],
+    firestoreThrows  = false,
+  } = {}) {
+    db.collection.mockImplementation((collectionName) => {
+      if (collectionName === 'issuances') {
+        return {
+          doc: jest.fn().mockReturnValue({
+            get: firestoreThrows
+              ? jest.fn().mockRejectedValue(new Error('Firestore unavailable'))
+              : jest.fn().mockResolvedValue({
+                  exists: issuanceExists,
+                  data: () => ({
+                    used: issuanceUsed,
+                    expiresAt: { toDate: () => EXPIRES_AT },
+                    profileCount,
+                  }),
+                }),
+          }),
+        };
+      }
+
+      if (collectionName === 'profiles') {
+        return {
+          where: jest.fn().mockReturnValue({
+            get: jest.fn().mockResolvedValue({
+              docs: profileDocs,
+            }),
+          }),
+        };
+      }
+    });
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 1 — Happy path
+  // -------------------------------------------------------------------------
+
+  describe('happy path', () => {
+    it('returns 200 with the correct response shape', async () => {
+      makeIssuanceMocks();
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        issuanceId:   ISSUANCE_ID,
+        status:       'pending',
+        expiresAt:    expect.any(String),
+        profileCount: 2,
+        profiles:     expect.any(Array),
+      });
+    });
+
+    it('status is "pending" when issuance.used is false', async () => {
+      makeIssuanceMocks({ issuanceUsed: false });
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('pending');
+    });
+
+    it('status is "used" when issuance.used is true', async () => {
+      makeIssuanceMocks({ issuanceUsed: true });
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('used');
+    });
+
+    it('profileId in each profile comes from doc.id, not doc.data()', async () => {
+      makeIssuanceMocks();
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.profiles[0].profileId).toBe('profile-1');
+      expect(res.body.profiles[1].profileId).toBe('profile-2');
+    });
+
+    it('expiresAt is serialized as an ISO 8601 string', async () => {
+      makeIssuanceMocks();
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.expiresAt).toBe(EXPIRES_AT.toISOString());
+    });
+
+    it('response does not include accountId (no data leak)', async () => {
+      makeIssuanceMocks();
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty('accountId');
+    });
+
+    it('each profile contains only profileId, displayName, and type', async () => {
+      makeIssuanceMocks();
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.profiles[0]).toEqual({
+        profileId:   'profile-1',
+        displayName: 'Alice Thunder',
+        type:        'adult',
+      });
+      expect(res.body.profiles[1]).toEqual({
+        profileId:   'profile-2',
+        displayName: 'Kid One',
+        type:        'child',
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 3 — Guard failures (one test per guard clause)
+  // -------------------------------------------------------------------------
+
+  describe('guard failures', () => {
+    it('returns 404 "issuance not found" when issuance doc does not exist', async () => {
+      makeIssuanceMocks({ issuanceExists: false });
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'issuance not found' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 4 — Edge cases
+  // -------------------------------------------------------------------------
+
+  describe('edge cases', () => {
+    it('returns an empty profiles array when no profiles are linked to the issuance', async () => {
+      makeIssuanceMocks({ profileCount: 0, profileDocs: [] });
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.profiles).toEqual([]);
+      expect(res.body.profileCount).toBe(0);
+    });
+
+    it('returns 500 "server error" and does not leak stack trace when Firestore throws', async () => {
+      makeIssuanceMocks({ firestoreThrows: true });
+
+      const res = await request(app).get(`/fan/issuance/${ISSUANCE_ID}`);
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'server error' });
+      expect(res.body).not.toHaveProperty('stack');
+      expect(res.body).not.toHaveProperty('message');
+    });
+  });
+});

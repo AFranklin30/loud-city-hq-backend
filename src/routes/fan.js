@@ -216,7 +216,49 @@ router.post('/createProfilesAndIssuance', async (req, res) => {
 
 // GET /fan/issuance/:issuanceId
 router.get('/issuance/:issuanceId', async (req, res) => {
-  res.status(501).json({ message: 'Not implemented yet' });
+  try {
+    // ── RECEIVE ──────────────────────────────────────────────
+    const { issuanceId } = req.params;
+
+    // ── GUARD ────────────────────────────────────────────────
+    if (!issuanceId) {
+      return res.status(400).json({ error: 'issuanceId is required' });
+    }
+
+    const issuanceSnap = await db.collection('issuances').doc(issuanceId).get();
+    if (!issuanceSnap.exists) {
+      return res.status(404).json({ error: 'issuance not found' });
+    }
+
+    const issuance = issuanceSnap.data();
+
+    // ── EXECUTE ──────────────────────────────────────────────
+    const profilesSnap = await db.collection('profiles')
+      .where('issuanceId', '==', issuanceId)
+      .get();
+
+    const profiles = profilesSnap.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        profileId: doc.id,
+        displayName: data.displayName,
+        type: data.type,
+      };
+    });
+
+    // ── RETURN ───────────────────────────────────────────────
+    return res.status(200).json({
+      issuanceId,
+      status: issuance.used ? 'used' : 'pending',
+      expiresAt: issuance.expiresAt.toDate().toISOString(),
+      profileCount: issuance.profileCount,
+      profiles,
+    });
+
+  } catch (err) {
+    console.error('[GET /fan/issuance/:issuanceId] error:', err);
+    return res.status(500).json({ error: 'server error' });
+  }
 });
 
 module.exports = router;
