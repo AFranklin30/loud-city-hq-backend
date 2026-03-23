@@ -233,6 +233,14 @@ router.get('/issuance/:issuanceId', async (req, res) => {
     const issuance = issuanceSnap.data();
 
     // ── EXECUTE ──────────────────────────────────────────────
+    // FIRESTORE INDEX REQUIRED
+    // Collection: profiles
+    // Field: issuanceId (Ascending)
+    // This query will fail without a composite index.
+    // Index has been created in Firebase console.
+    // If deploying to a new Firebase project,
+    // create this index before testing:
+    // Firebase console > Firestore > Indexes > Composite > Add index
     const profilesSnap = await db.collection('profiles')
       .where('issuanceId', '==', issuanceId)
       .get();

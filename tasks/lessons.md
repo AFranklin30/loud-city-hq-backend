@@ -80,6 +80,16 @@ app.use(cors())
 
 ---
 
+## 2026-03-22 — Never silently add logic beyond the pseudocode spec
+
+**What went wrong:** During implementation of `POST /staff/issueCard`, the implementer added a defensive `404 account not found` guard (`accountSnap.exists` check) that is not in the pseudocode spec. It was added silently without flagging it or asking for approval. The gap was only discovered when writing tests.
+
+**Rule:** If the implementer wants to add any logic not specified in the pseudocode — defensive guards, extra error cases, derived fields, fallbacks — it must stop and ask before adding it. Never silently add unspecced logic. Flag it, get approval, then add it.
+
+**Why:** Unspecced logic can mask data integrity issues, introduce untested code paths, or diverge from the agreed API contract without the team knowing. The pseudocode is the source of truth.
+
+---
+
 ## 2026-03-21 — Atomic writes require db.batch()
 
 **What went wrong:** The validator caught that `accounts` and `emailIndex` were being written as separate `.set()` calls in `POST /fan/registerStart` with no atomicity guarantee. If the first write succeeded and the second failed, the system would be left in an inconsistent state — an account with no reserved email index, allowing duplicate registrations on retry.
