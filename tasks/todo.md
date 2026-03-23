@@ -12,7 +12,7 @@
 - [ ] POST /staff/manualStamp
 
 ## Station
-- [ ] POST /station/stamp
+- [x] POST /station/stamp — implemented, tested
 
 ## Tap
 - [x] GET /t/:token — implemented, tested
