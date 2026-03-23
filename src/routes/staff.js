@@ -104,7 +104,96 @@ router.post('/issueCard', async (req, res) => {
 });
 
 router.post('/redeem', async (req, res) => {
-  res.status(501).json({ message: 'Not implemented yet' });
+  try {
+    // ── RECEIVE ────────────────────────────────────────────
+    const { token } = req.body;
+
+    // ── GUARD ──────────────────────────────────────────────
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ error: 'token is required' });
+    }
+
+    const cardSnap = await db.collection('cards').doc(token).get();
+    if (!cardSnap.exists) {
+      return res.status(404).json({ error: 'card not found' });
+    }
+    const card = cardSnap.data();
+
+    if (card.active === false) {
+      return res.status(400).json({ error: 'card already inactive' });
+    }
+
+    const profileSnap = await db.collection('profiles').doc(card.profileId).get();
+    if (!profileSnap.exists) {
+      return res.status(404).json({ error: 'profile not found' });
+    }
+    const profile = profileSnap.data();
+
+    if (profile.redeemed === true) {
+      return res.status(400).json({ error: 'already redeemed' });
+    }
+
+    const stationsSnap = await db.collection('stations').where('active', '==', true).get();
+    const totalStations = stationsSnap.size;
+
+    const completedCount = Object.keys(profile.stamps || {}).length;
+
+    if (completedCount < totalStations) {
+      return res.status(400).json({
+        error: 'stamp card incomplete',
+        missing: totalStations - completedCount,
+      });
+    }
+
+    // ── EXECUTE ────────────────────────────────────────────
+    const now = new Date();
+
+    await db.runTransaction(async (t) => {
+      const profileRef = db.collection('profiles').doc(card.profileId);
+      const profileDoc = await t.get(profileRef);
+
+      if (profileDoc.data().redeemed === true) {
+        const err = new Error('already redeemed');
+        err.code = 'ALREADY_REDEEMED';
+        throw err;
+      }
+
+      t.update(profileRef, {
+        redeemed: true,
+        redeemedAt: now,
+      });
+
+      t.update(db.collection('cards').doc(token), {
+        active: false,
+        returnedAt: now,
+      });
+
+      t.update(db.collection('accounts').doc(card.accountId), {
+        activeCardCount: admin.firestore.FieldValue.increment(-1),
+      });
+    });
+
+    // ── RETURN ──────────────────────────────────────────────
+    const normalizedStamps = {};
+    for (const [key, value] of Object.entries(profile.stamps || {})) {
+      normalizedStamps[key] = value && value.toDate
+        ? value.toDate().toISOString()
+        : new Date(value).toISOString();
+    }
+
+    return res.status(200).json({
+      redeemed: true,
+      displayName: profile.displayName,
+      stamps: normalizedStamps,
+    });
+
+  } catch (err) {
+    if (err.code === 'ALREADY_REDEEMED') {
+      return res.status(400).json({ error: 'already redeemed' });
+    }
+    console.error('[POST /staff/redeem] error:', err);
+    return res.status(500).json({ error: 'server error' });
+  }
 });
 
 router.post('/manualStamp', async (req, res) => {
