@@ -7,7 +7,7 @@
 - [x] GET /fan/issuance/:issuanceId — implemented, tested
 
 ## Staff
-- [ ] POST /staff/issueCard
+- [x] POST /staff/issueCard — implemented, tested
 - [ ] POST /staff/redeem
 - [ ] POST /staff/manualStamp
 
@@ -15,7 +15,7 @@
 - [ ] POST /station/stamp
 
 ## Tap
-- [ ] GET /t/:token
+- [x] GET /t/:token — implemented, tested
 
 ## TODOs
 - [ ] OTP service (stubbed in registerStart)
