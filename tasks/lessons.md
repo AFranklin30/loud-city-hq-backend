@@ -114,6 +114,14 @@ app.use(cors())
 
 ---
 
+## 2026-03-23 — Collection-level .get() needs its own mock branch
+
+**What happened:** `POST /staff/redeem` counts total stations via `db.collection('stations').get()` — no `.doc()`, no `.where()`. The existing mock pattern only covered `doc().get()` and `where().get()`, so `stations` needed a dedicated branch returning `{ get: jest.fn().mockResolvedValue({ size: N }) }`.
+
+**Rule:** When an endpoint calls `.get()` directly on a collection (count query pattern), add a mock branch for that collection that returns `{ get: jest.fn().mockResolvedValue({ size: N }) }`. Don't confuse it with the `.doc().get()` or `.where().get()` patterns — those need different mock shapes.
+
+---
+
 ## 2026-03-21 — Atomic writes require db.batch()
 
 **What went wrong:** The validator caught that `accounts` and `emailIndex` were being written as separate `.set()` calls in `POST /fan/registerStart` with no atomicity guarantee. If the first write succeeded and the second failed, the system would be left in an inconsistent state — an account with no reserved email index, allowing duplicate registrations on retry.
