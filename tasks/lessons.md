@@ -90,6 +90,30 @@ app.use(cors())
 
 ---
 
+## 2026-03-22 — Always checkout and pull dev before creating a new branch
+
+**What went wrong:** A new feature branch was created directly from another feature branch (`feature/tap-token-endpoint`) instead of from an up-to-date `dev`. The branch would have contained unrelated commits if `dev` had diverged.
+
+**Rule:** Always `git checkout dev && git pull` before `git checkout -b feature/...`. Never branch off another feature branch.
+
+---
+
+## 2026-03-22 — Middleware must be a single async function — not a nested inner function
+
+**What went wrong:** The initial `stationKey.js` defined an outer function `stationKeyMiddleware(req, res, next)` that contained an inner async function `verifyStationKey` — but never called it. The outer function returned `undefined`, effectively bypassing all auth logic silently.
+
+**Rule:** Middleware must be exported as a single `async function(req, res, next)`. Never define logic inside a nested inner function unless it is explicitly invoked. Always verify that `next()` is reachable on the happy path.
+
+---
+
+## 2026-03-22 — Validator catches double middleware application
+
+**What went wrong:** `stationKey` was applied twice — once via `router.use(stationKey)` and again as a route-level argument in `router.post('/stamp', stationKey, ...)`. The validator caught this.
+
+**Rule:** When a router already has `router.use(middleware)`, do not repeat the middleware as a route-level argument. One or the other — not both.
+
+---
+
 ## 2026-03-21 — Atomic writes require db.batch()
 
 **What went wrong:** The validator caught that `accounts` and `emailIndex` were being written as separate `.set()` calls in `POST /fan/registerStart` with no atomicity guarantee. If the first write succeeded and the second failed, the system would be left in an inconsistent state — an account with no reserved email index, allowing duplicate registrations on retry.
