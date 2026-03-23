@@ -46,6 +46,12 @@ return res.status(200).json({ ... });
 - Log the real error server-side: console.error('[endpoint] error:', err)
 - /station/stamp business failures → 200 with result field, never 4xx
 
+## Spec Boundaries
+Only implement what is in the pseudocode spec.
+If you identify defensive code or edge cases worth adding
+that are NOT in the spec — stop and ask the user before adding them.
+Never silently add unspecced logic.
+
 ### Elegance Check
 Before submitting: ask "would a staff engineer approve this?"
 If any block of code feels repetitive or hacky, refactor it.
