@@ -134,3 +134,70 @@ app.use(cors())
 - `POST /staff/issueCard` — cards + accounts update + conditional issuances update
 - `POST /staff/redeem` — profiles + cards + accounts update
 - `POST /staff/manualStamp` — profiles + stampEvents
+
+---
+
+## 2026-03-23 — cards collection uses token as document ID
+
+**Rule:** Always look up cards via `db.collection('cards').doc(token)`. Never query with `.where('token', '==', token)` — the token IS the document ID, so a direct lookup is both faster and correct.
+
+---
+
+## 2026-03-23 — Normalize stamps map to ISO strings before returning
+
+**Rule:** Any endpoint that returns a `stamps` map must serialize each value before sending it in the response:
+
+```js
+ts.toDate ? ts.toDate().toISOString() : new Date(ts).toISOString()
+```
+
+This handles both Firestore Timestamps and plain JS Dates.
+
+**Applies to:** All endpoints that return `stamps` in the response body.
+
+---
+
+## 2026-03-23 — Count only active stations for totalStations
+
+**Rule:** Always use `.where('active', '==', true)` when querying the stations collection to derive `totalStations`. A deactivated station must never count toward completion.
+
+**Applies to:** Any endpoint that checks whether a stamp card is complete.
+
+---
+
+## 2026-03-23 — Use db.runTransaction() for redemption — concurrent writes are a real risk
+
+**Rule:** The `POST /staff/redeem` endpoint must use `db.runTransaction()`, not `db.batch()`. A transaction re-reads `redeemed` inside the write, preventing double redemption when two staff members scan the same card simultaneously at a live event. `db.batch()` does not protect against this race.
+
+**Applies to:** Any endpoint where the same action could be triggered concurrently for the same document (redemptions, stamp deduplication, etc.).
+
+---
+
+## 2026-03-23 — Throw typed errors inside transactions for clean catch handling
+
+**Rule:** When a transaction must abort for a business reason (e.g. already redeemed), throw an error with a `code` property:
+
+```js
+const err = new Error('already redeemed');
+err.code = 'ALREADY_REDEEMED';
+throw err;
+```
+
+The outer `catch` can then distinguish business failures from real server errors without exposing internal details to the client.
+
+**Applies to:** Any `db.runTransaction()` that checks a guard condition inside the write.
+
+---
+
+## 2026-03-23 — toHaveProperty() interprets dots as nested path separators
+
+**What went wrong:** `expect(updateArg).toHaveProperty('stamps.station-abc-001')` failed because Jest's `toHaveProperty` treats dots as nested object path separators — it looked for `{ stamps: { 'station-abc-001': ... } }` instead of the literal key `'stamps.station-abc-001'`.
+
+**Rule:** When asserting a literal dotted key (e.g. a Firestore field path like `stamps.stationId`), use `Object.keys` + `toContain` instead:
+
+```js
+expect(Object.keys(updateArg)).toContain(`stamps.${stationId}`);
+expect(updateArg[`stamps.${stationId}`]).toBeInstanceOf(Date);
+```
+
+**Applies to:** Any test asserting Firestore dot-notation field paths in batch/transaction update arguments.

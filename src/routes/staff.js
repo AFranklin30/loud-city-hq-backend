@@ -163,7 +163,84 @@ router.post('/redeem', async (req, res) => {
 });
 
 router.post('/manualStamp', async (req, res) => {
-  res.status(501).json({ message: 'Not implemented yet' });
+  try {
+    // ── RECEIVE ────────────────────────────────────────────
+    const { token, stationId } = req.body;
+
+    // ── GUARD ──────────────────────────────────────────────
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ error: 'token is required' });
+    }
+    if (!stationId || typeof stationId !== 'string') {
+      return res.status(400).json({ error: 'stationId is required' });
+    }
+
+    const cardSnap = await db.collection('cards').doc(token).get();
+    if (!cardSnap.exists) {
+      return res.status(404).json({ error: 'card not found' });
+    }
+    const card = cardSnap.data();
+
+    if (card.active === false) {
+      return res.status(400).json({ error: 'card not active' });
+    }
+
+    const profileSnap = await db.collection('profiles').doc(card.profileId).get();
+    if (!profileSnap.exists) {
+      return res.status(404).json({ error: 'profile not found' });
+    }
+    const profile = profileSnap.data();
+
+    if (profile.redeemed === true) {
+      return res.status(400).json({ error: 'already redeemed' });
+    }
+
+    const stationSnap = await db.collection('stations').doc(stationId).get();
+    if (!stationSnap.exists) {
+      return res.status(404).json({ error: 'station not found' });
+    }
+
+    if (profile.stamps && profile.stamps[stationId]) {
+      return res.status(400).json({ error: 'duplicate stamp' });
+    }
+
+    // ── EXECUTE ────────────────────────────────────────────
+    const now = new Date();
+    const stampEventId = uuidv4();
+
+    const batch = db.batch();
+
+    batch.update(db.collection('profiles').doc(card.profileId), {
+      [`stamps.${stationId}`]: now,
+    });
+
+    batch.set(db.collection('stampEvents').doc(stampEventId), {
+      stampEventId,
+      profileId: card.profileId,
+      stationId,
+      token,
+      result: 'success',
+      deviceId: 'manual',
+      ts: now,
+    });
+
+    await batch.commit();
+
+    // ── RETURN ──────────────────────────────────────────────
+    const updatedStamps = { ...(profile.stamps || {}), [stationId]: now };
+    const normalizedStamps = {};
+    for (const [key, value] of Object.entries(updatedStamps)) {
+      normalizedStamps[key] = value && value.toDate
+        ? value.toDate().toISOString()
+        : new Date(value).toISOString();
+    }
+
+    return res.status(200).json({ ok: true, stamps: normalizedStamps });
+
+  } catch (err) {
+    console.error('[POST /staff/manualStamp] error:', err);
+    return res.status(500).json({ error: 'server error' });
+  }
 });
 
 module.exports = router;

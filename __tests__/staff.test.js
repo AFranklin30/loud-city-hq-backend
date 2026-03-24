@@ -732,3 +732,334 @@ describe('POST /staff/redeem', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helpers — manualStamp
+// ---------------------------------------------------------------------------
+
+const STATION_ID = 'station-abc-001';
+
+function makeManualStampMocks({
+  cardExists        = true,
+  cardActive        = true,
+  profileExists     = true,
+  profileRedeemed   = false,
+  existingStamps    = {},
+  stationExists     = true,
+  commitShouldThrow = false,
+  firestoreThrows   = false,
+} = {}) {
+  const batchMock = makeBatchMock({ commitShouldThrow });
+  db.batch.mockReturnValue(batchMock);
+
+  db.collection.mockImplementation((collectionName) => {
+    if (collectionName === 'cards') {
+      return {
+        doc: jest.fn().mockReturnValue({
+          get: firestoreThrows
+            ? jest.fn().mockRejectedValue(new Error('Firestore unavailable'))
+            : jest.fn().mockResolvedValue({
+                exists: cardExists,
+                data: () => ({ active: cardActive, profileId: PROFILE_ID, accountId: ACCOUNT_ID }),
+              }),
+        }),
+      };
+    }
+
+    if (collectionName === 'profiles') {
+      return {
+        doc: jest.fn().mockReturnValue({
+          get: jest.fn().mockResolvedValue({
+            exists: profileExists,
+            data: () => ({ redeemed: profileRedeemed, stamps: existingStamps, displayName: 'Test Fan' }),
+          }),
+        }),
+      };
+    }
+
+    if (collectionName === 'stations') {
+      return {
+        doc: jest.fn().mockReturnValue({
+          get: jest.fn().mockResolvedValue({ exists: stationExists }),
+        }),
+      };
+    }
+
+    if (collectionName === 'stampEvents') {
+      return {
+        doc: jest.fn().mockReturnValue({}),   // ref only — batch.set doesn't call get()
+      };
+    }
+
+    return { doc: jest.fn().mockReturnValue({}) };
+  });
+
+  return batchMock;
+}
+
+// ---------------------------------------------------------------------------
+// describe block
+// ---------------------------------------------------------------------------
+
+describe('POST /staff/manualStamp', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 1 — Happy path
+  // -------------------------------------------------------------------------
+
+  describe('happy path', () => {
+    it('returns 200 { ok: true, stamps } for a valid request', async () => {
+      makeManualStampMocks();
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body).toHaveProperty('stamps');
+    });
+
+    it('response stamps contains the newly awarded stationId key', async () => {
+      makeManualStampMocks({ existingStamps: {} });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(200);
+      expect(res.body.stamps).toHaveProperty(STATION_ID);
+    });
+
+    it('response stamps values are ISO strings (normalization)', async () => {
+      const fixedDate = new Date('2026-03-23T12:00:00.000Z');
+      makeManualStampMocks({
+        existingStamps: {
+          'station-existing': { toDate: () => fixedDate },
+        },
+      });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(200);
+      // existing stamp (Firestore Timestamp) normalized to ISO string
+      expect(res.body.stamps['station-existing']).toBe(fixedDate.toISOString());
+      // new stamp (JS Date) also normalized to ISO string
+      expect(typeof res.body.stamps[STATION_ID]).toBe('string');
+      expect(res.body.stamps[STATION_ID]).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it('batch.update called once with the correct stamps field path', async () => {
+      const batchMock = makeManualStampMocks();
+
+      await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(batchMock.update.mock.calls.length).toBe(1);
+      const updateArg = batchMock.update.mock.calls[0][1];
+      expect(Object.keys(updateArg)).toContain(`stamps.${STATION_ID}`);
+      expect(updateArg[`stamps.${STATION_ID}`]).toBeInstanceOf(Date);
+    });
+
+    it('batch.set called once with correct stampEvent fields', async () => {
+      const batchMock = makeManualStampMocks();
+
+      await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(batchMock.set.mock.calls.length).toBe(1);
+      const stampEventData = batchMock.set.mock.calls[0][1];
+      expect(stampEventData).toMatchObject({
+        stampEventId: expect.any(String),
+        profileId:    PROFILE_ID,
+        stationId:    STATION_ID,
+        token:        TOKEN,
+        result:       'success',
+        deviceId:     'manual',
+        ts:           expect.any(Date),
+      });
+    });
+
+    it('batch.commit() is called once', async () => {
+      const batchMock = makeManualStampMocks();
+
+      await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(batchMock.commit).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves existing stamps in response alongside the new one', async () => {
+      makeManualStampMocks({
+        existingStamps: { 'station-other': new Date() },
+      });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(200);
+      expect(res.body.stamps).toHaveProperty('station-other');
+      expect(res.body.stamps).toHaveProperty(STATION_ID);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 3 — Guard failures (one test per guard clause)
+  // -------------------------------------------------------------------------
+
+  describe('guard failures', () => {
+    it('returns 400 "token is required" when token is missing', async () => {
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ stationId: STATION_ID });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'token is required' });
+    });
+
+    it('returns 400 "token is required" when token is not a string', async () => {
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: 123, stationId: STATION_ID });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'token is required' });
+    });
+
+    it('returns 400 "stationId is required" when stationId is missing', async () => {
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'stationId is required' });
+    });
+
+    it('returns 400 "stationId is required" when stationId is not a string', async () => {
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: 42 });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'stationId is required' });
+    });
+
+    it('returns 404 "card not found" when card does not exist', async () => {
+      makeManualStampMocks({ cardExists: false });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'card not found' });
+    });
+
+    it('returns 400 "card not active" when card.active === false', async () => {
+      makeManualStampMocks({ cardActive: false });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'card not active' });
+    });
+
+    it('returns 404 "profile not found" when profile does not exist', async () => {
+      makeManualStampMocks({ profileExists: false });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'profile not found' });
+    });
+
+    it('returns 400 "already redeemed" when profile.redeemed === true', async () => {
+      makeManualStampMocks({ profileRedeemed: true });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'already redeemed' });
+    });
+
+    it('returns 404 "station not found" when station does not exist', async () => {
+      makeManualStampMocks({ stationExists: false });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'station not found' });
+    });
+
+    it('returns 400 "duplicate stamp" when stationId already exists in profile.stamps', async () => {
+      makeManualStampMocks({
+        existingStamps: { [STATION_ID]: new Date() },
+      });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'duplicate stamp' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Layer 4 — Edge cases
+  // -------------------------------------------------------------------------
+
+  describe('edge cases', () => {
+    it('returns 500 "server error" when batch.commit() throws', async () => {
+      makeManualStampMocks({ commitShouldThrow: true });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'server error' });
+    });
+
+    it('returns 500 and does not leak stack trace when Firestore throws', async () => {
+      makeManualStampMocks({ firestoreThrows: true });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'server error' });
+      expect(res.body).not.toHaveProperty('stack');
+      expect(res.body).not.toHaveProperty('message');
+    });
+
+    it('returns 200 when existingStamps is empty (first stamp on card)', async () => {
+      makeManualStampMocks({ existingStamps: {} });
+
+      const res = await request(app)
+        .post('/staff/manualStamp')
+        .send({ token: TOKEN, stationId: STATION_ID });
+
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body.stamps)).toEqual([STATION_ID]);
+    });
+  });
+});
