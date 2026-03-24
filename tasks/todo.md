@@ -9,7 +9,7 @@
 ## Staff
 - [x] POST /staff/issueCard — implemented, tested
 - [x] POST /staff/redeem — implemented, tested
-- [ ] POST /staff/manualStamp
+- [x] POST /staff/manualStamp — implemented, tested
 
 ## Station
 - [x] POST /station/stamp — implemented, tested
